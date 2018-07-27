@@ -30,7 +30,9 @@ FJ <- function(i) {
         }
         cost[u] <- g[i,u] + alpha*cost.to.go
     }
-    min(cost)
+    cost.star <- min(cost)
+    ctrl <- which(near(cost.star, cost)) # store the ctrl that achieves the min cost
+    list(cost.star, ctrl)
 }
 
 
@@ -46,12 +48,15 @@ eps <- .0001                      # tolerance for convergence
 k <- 0                            # iteration number
 J <- rep(0, length(S))            # initially, start the value iteration with zero cost
 J.prev <- rep(eps + 1, length(S)) # to check convergence
+policy <- rep(NA, length(S))
 
 while (!all(near(J - J.prev, 0, tol=eps))) {
     k <- k + 1
     J.prev <- J
     for (j in 1:length(S)) {
-        J[j] <- FJ(j)
+        lst <- FJ(j)
+        J[j] <- lst[[1]]
+        policy[j] <- lst[[2]]
         if (near(k %% 100, 0)) { # print a message to check progress
             message("k = ", k, " J(", j, ") = ", J[j])
         }
