@@ -2,9 +2,10 @@
 ## bertsekas, dynamic programming and optimal control volume 2.
 library(tidyverse)
 
-S <- 1:2
-C <- 1:2
+S <- 1:2  # state space
+C <- 1:2  # controls
 
+## transition probabilities
 P <- array(data = c(3/4, 3/4, 1/4, 1/4,
                   1/4, 1/4, 3/4, 3/4),
            dim = c(2, 2, 2),
@@ -12,12 +13,13 @@ P <- array(data = c(3/4, 3/4, 1/4, 1/4,
                             statej=as.character(S),
                             control=as.character(C)))
 
+## cost to apply control j in state i
 g <- array(data = c(2, 1, 0.5, 3),
            dim = c(2, 2),
            dimnames = list(state=as.character(S),
                            control=as.character(C)))
 
-alpha <- 0.9
+alpha <- 0.9   # discount factor
 
 ## applies the DP iteration for state i
 ## note: the error bounds are not yet implemented
