@@ -1,5 +1,7 @@
 ## implementation of value iteration for example 1.3.1 in
 ## bertsekas, dynamic programming and optimal control volume 2.
+## this code is for illustrative purposes. it can serve as a
+## starting point to solve other DP problems.
 library(tidyverse)
 
 S <- 1:2  # state space
@@ -13,7 +15,7 @@ P <- array(data = c(3/4, 3/4, 1/4, 1/4,
                             statej=as.character(S),
                             control=as.character(C)))
 
-## cost to apply control j in state i
+## cost to apply control u in state i
 g <- array(data = c(2, 1, 0.5, 3),
            dim = c(2, 2),
            dimnames = list(state=as.character(S),
@@ -36,7 +38,6 @@ FJ <- function(i) {
     ctrl <- which(near(cost.star, cost)) # store the ctrl that achieves the min cost
     list(cost.star, ctrl)
 }
-
 
 ## apply the value iteration algorithm.
 ## note that this is the gauss-seidel version of value iteration
@@ -64,9 +65,3 @@ while (!all(near(J - J.prev, 0, tol=eps))) {
         }
     }
 }
-
-
-
-
-    
-        
