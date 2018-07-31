@@ -2,23 +2,18 @@
 library(tidyverse)
 
 ## state space is the number of txs in the mempool
-lb <- 1000
-ub <- 10000
+lb <- 0
+ub <- 20000
 S <- seq(lb, ub, by=1)
 ## control is the block size in MB
 ## 1 MB gets 2000 txs
 ## 2 MB gets 4000 txs
-C <- 1:2
+C <- 1:3
 
 lambda <- 2500  # arrival rate of new txs (per 10 minutes)
 c <- .10        # user delay cost in $ per minute
 
-plot(S, dpois(S, 2500))
-
-f <- function(x, u, w) {   # system evolution
-    stopifnot(u %in% 1:2)
-    x - u*2000 + w
-}
+f <- function(x, u, w) x - u*2000 + w  # system evolution    
 
 ## transition probabilities
 P <- array(0,
@@ -64,13 +59,14 @@ FJ <- function(i) {
     list(cost.star, ctrl[1])
 }
 
-## apply the value iteration algorithm.
-eps <- .0001                      # tolerance for convergence
+## initialization
+eps <- .00001                     # tolerance for convergence
 k <- 0                            # iteration number
 J <- rep(100, length(S))          # initial starting values
 J.prev <- rep(eps + 1, length(S)) # to check convergence
 policy <- rep(NA, length(S))
 
+## value iteration
 while (!all(near(J - J.prev, 0, tol=eps))) {
     k <- k + 1
     J.prev <- J
@@ -83,3 +79,15 @@ while (!all(near(J - J.prev, 0, tol=eps))) {
         }
     }
 }
+
+## diagnostics
+SS <- data.frame(S=S, g1=g[,1], g2=g[,2], g3=g[,3])
+
+ggplot(SS) +
+    geom_line(aes(x=S, y=g1)) +
+    geom_line(aes(x=S, y=g2)) +
+    geom_line(aes(x=S, y=g3))
+
+
+plot(S, P[2000,,1])
+    
