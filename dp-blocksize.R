@@ -37,43 +37,60 @@ for (x in 1:length(X)) {
     }
 }
 
-## applies the DP iteration. note that x,y are the indices
-## into the state space
+## transition probabilities.
+## When computing the value-to-go, we need to take
+## expectation wrt the random component xi. We want to know the
+## probability of going from (x,y) to (x.next,y.next) when control u
+## is applied. From the system equations for x.next, y.next
+## x.next = x - u + (lambda*y + xi)
+## and
+## y.next = lambda*y + xi
+## During value iteration we will know x,y,x.next,y.next and we
+## compute the probability of observing the associated value of xi.
+## Note that we can use either system equation to solve for xi.
+## Let's use the system equation for y.next since the state space
+## for y is smaller than for x. Given y and y.next,
+## xi = y.next - lambda*y
+## what is the probability that xi took on this value?
+## xi ~ Normal(b0, sigma), so an estimate is provided by
+## pnorm(xi+.5, mean=b0, sd=sigma) - pnorm(xi-.5, mean=b0, sd=sigma)
+P <- array(data = NA,
+           dim = c(length(Y), length(Y), length(C)),
+           dimnames = list(statey=as.character(Y),
+                           stateynext=as.character(Y),
+                           control=as.character(C)))
+for (y in 1:length(Y)) {
+    for (y.next in 1:length(Y)) {
+        for (u in 1:length(C)) {
+            xi <- Y[y.next] - lambda*Y[y]
+            P[y,y.next,u] <- pnorm(xi+.5, mean=b0, sd=sigma) -
+                pnorm(xi-.5, mean=b0, sd=sigma)
+        }
+    }
+}
+
+## applies the DP iteration.
+## note that x,y are indices into the state space, while x.next, y.next
+## are state space values.
 F <- function(x, y) {
     val <- rep(Inf, length(C))   # holds the rev for each control
     for (u in 1:length(C)) {
-        cost.to.go <- 0
-        for (x.next in X) {
-            ## prob of going from X[x],Y[y] to x.next,y.next
-            ## see note on computation of cost.to.go
-            xi <- x.next - X[x] + min(C[u]*K, X[x]) - lambda*Y[y]
-            ## what is the probability that we see this value for xi?
-            p <- pnorm(xi+.5, mean=b0, sd=sigma) -
-                pnorm(xi-.5, mean=b0, sd=sigma)
-            y.next <- min(max(0, lambda*Y[y] + xi), Y[length(Y)])
-            cost.to.go <- cost.to.go + p*V[x.next+1,y.next+1]
-            ## x.next, y.next are states, but we need to index into V
-            val[u] <- g[x,u] + alpha*cost.to.go
+        val.to.go <- 0
+        for (y.next in Y) {
+            ## expectation is wrt xi.
+            ## see note on computation of transition probabilities.
+            x.next <- min(max(0, X[x] - C[u] + y.next), X[length(X)])
+            val.to.go <- val.to.go + P[y,y.next+1,u]*V[x.next+1,y.next+1]
+            val[u] <- g[x,u] + alpha*val.to.go
         }
     }
     val.star <- max(val)
     ctrl <- which(near(val.star, val))  # could be a tie
     list(val.star, ctrl[1])             # so just choose 1st entry
 }
-## note on computation of cost.to.go.
-## first note that it's really value-to-go. Now, we need to take
-## expectation wrt the random component xi. We want to know the
-## probability of going from (x,y) to (x.next,y.next).
-## from the system equation for x,
-## x.next = x - u + lambda*y + xi
-## this means that xi has to be equal to
-## xi = 
-## what is the probability that xi took on this value?
-## xi ~ Normal(b0, sigma), so an estimate is provided by
-## pnorm(xi+.5, mean=b0, sd=sigma) - pnorm(xi-.5, mean=b0, sd=sigma)
     
 ## initialization
-eps <- .1     # tolerance for convergence
+eps <- .01     # tolerance for convergence
 k <- 0          # iteration number
 V <- matrix(0, nrow=length(X), ncol=length(Y)) # initial values
 V.prev <- matrix(eps + 1, nrow=length(X), ncol=length(Y))
@@ -104,7 +121,6 @@ SS$policy <- as.vector(policy)
 
 ggplot(SS, aes(x=x,y=y)) +
     geom_raster(aes(fill=policy))
-
 
 library(scatterplot3d)  # an alternative to ggplot2
 with(SS, scatterplot3d(x=x, y=y, z=policy, pch=20))
