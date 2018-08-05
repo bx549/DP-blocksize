@@ -1,93 +1,110 @@
 ## value iteration for dynamic block size
 library(tidyverse)
 
-## state space is the number of txs in the mempool
-lb <- 0
-ub <- 20000
-S <- seq(lb, ub, by=1)
+## state space
+X <- seq(0, 200, by=1)  # size of mempool
+Y <- seq(0, 25, by=1)   # number of arrivals during prev period
+
 ## control is the block size in MB
 ## 1 MB gets 2000 txs
 ## 2 MB gets 4000 txs
-C <- 1:3
+## and so on
+C <- 1:2  # possible controls
+K <- 10   # txs per block
 
-lambda <- 2500  # arrival rate of new txs (per 10 minutes)
-c <- .10        # user delay cost in $ per minute
+alpha <- .9  # discount factor for DP iteration
+b <- function(x) 15/(1 + exp(-.05*(x-100))) # tx fee in satoshis per byte
+lambda <- .7 # coefficient for AR1 model w_k = lambda*w_{k-1} + xi_k
+sigma <- 5   # sd for error term in AR1 model
+b0 <- 10     # in the AR1 model
 
-f <- function(x, u, w) x - u*2000 + w  # system evolution    
-
-## transition probabilities
-P <- array(0,
-           dim = c(length(S), length(S), length(C)),
-           dimnames = list(statei=as.character(S),
-                           statej=as.character(S),
-                           control=as.character(C)))
-for (i in 1:length(S)) {
-#    for (j in 1:length(S)) {
-        for (u in 1:length(C)) {
-            ## compute transition prob. in order to go from i to j
-            ## when u is applied, w would need to be j-i+u*2000
-            w <- pmax(S - S[i] + C[u]*2000, 0)
-            P[i,,u] <- dpois(w, lambda)
-        }
-#    }
+f <- function(x, y, u) {
+    xi <- rnorm(1, 0, sigma)
+    x.next <- max(0, x - u*K + lambda*y + xi)
+    y.next <- max(0, lambda*y + xi)
+    list(x.next, y.next)
 }
 
-## cost to apply control u in state i
+## utility of applying control u in state (x,y)
+## really only depends on x_k and not (directly) on y_k
 g <- array(data = 0,
-           dim = c(length(S), length(C)),
-           dimnames = list(state=as.character(S),
+           dim = c(length(X), length(C)),
+           dimnames = list(statex=as.character(X),
                            control=as.character(C)))
-
-for (i in 1:length(S)) {
+for (x in 1:length(X)) {
     for (u in 1:length(C)) {
-        g[i,u] <- max(S[i] - C[u]*2000*c*10, 0)
+        g[x,u] <- b(X[x])*min(C[u]*K, X[x])
     }
 }
 
-## applies the DP iteration for state i. note that the argument i is
-## is the index into the state space S.
-## note: the error bounds are not yet implemented
-FJ <- function(i) {
-    cost <- rep(Inf, length(C))   # holds the cost for each control
+## applies the DP iteration. note that x,y are the indices
+## into the state space
+F <- function(x, y) {
+    val <- rep(Inf, length(C))   # holds the rev for each control
     for (u in 1:length(C)) {
-        cost.to.go <- sum( P[i,,u]*J )
-        cost[u] <- g[i,u] + alpha*cost.to.go
+        cost.to.go <- 0
+        for (x.next in X) {
+            ## prob of going from X[x],Y[y] to x.next,y.next
+            ## see note on computation of cost.to.go
+            xi <- x.next - X[x] + min(C[u]*K, X[x]) - lambda*Y[y]
+            ## what is the probability that we see this value for xi?
+            p <- pnorm(xi+.5, mean=b0, sd=sigma) -
+                pnorm(xi-.5, mean=b0, sd=sigma)
+            y.next <- min(max(0, lambda*Y[y] + xi), Y[length(Y)])
+            cost.to.go <- cost.to.go + p*V[x.next+1,y.next+1]
+            ## x.next, y.next are states, but we need to index into V
+            val[u] <- g[x,u] + alpha*cost.to.go
+        }
     }
-    cost.star <- min(cost)
-    ctrl <- which(near(cost.star, cost)) # store the ctrl that achieves the min cost
-    ## note that there could be a tie and length(ctrl) > 1, hence just choose 1st entry
-    list(cost.star, ctrl[1])
+    val.star <- max(val)
+    ctrl <- which(near(val.star, val))  # could be a tie
+    list(val.star, ctrl[1])             # so just choose 1st entry
 }
-
+## note on computation of cost.to.go.
+## first note that it's really value-to-go. Now, we need to take
+## expectation wrt the random component xi. We want to know the
+## probability of going from (x,y) to (x.next,y.next).
+## from the system equation for x,
+## x.next = x - u + lambda*y + xi
+## this means that xi has to be equal to
+## xi = 
+## what is the probability that xi took on this value?
+## xi ~ Normal(b0, sigma), so an estimate is provided by
+## pnorm(xi+.5, mean=b0, sd=sigma) - pnorm(xi-.5, mean=b0, sd=sigma)
+    
 ## initialization
-eps <- .00001                     # tolerance for convergence
-k <- 0                            # iteration number
-J <- rep(100, length(S))          # initial starting values
-J.prev <- rep(eps + 1, length(S)) # to check convergence
-policy <- rep(NA, length(S))
+eps <- .1     # tolerance for convergence
+k <- 0          # iteration number
+V <- matrix(0, nrow=length(X), ncol=length(Y)) # initial values
+V.prev <- matrix(eps + 1, nrow=length(X), ncol=length(Y))
+policy <- matrix(NA, nrow=length(X), ncol=length(Y))
 
 ## value iteration
-while (!all(near(J - J.prev, 0, tol=eps))) {
+while (!all(near(V - V.prev, 0, tol=eps))) {
     k <- k + 1
-    J.prev <- J
-    for (j in 1:length(S)) {
-        lst <- FJ(j)    # pass the index
-        J[j] <- lst[[1]]
-        policy[j] <- lst[[2]]
-        if (near(k %% 100, 0)) { # print a message to check progress
-            message("k = ", k, " J(", j, ") = ", J[j])
+    V.prev <- V
+    for (x in 1:length(X)) {
+        for (y in 1:length(Y)) {
+            lst <- F(x, y) # pass the indices
+            V[x,y] <- lst[[1]]
+            policy[x,y] <- lst[[2]]
         }
+    }
+    if (near(k %% 25, 0)) { # print a message to check progress
+        message("k = ", k, "sum(V-V.prev) = ", sum(V-V.prev))
     }
 }
 
-## diagnostics
-SS <- data.frame(S=S, g1=g[,1], g2=g[,2], g3=g[,3])
+## diagnostics and visualization of the optimal value function
+## and the optimal policy
 
-ggplot(SS) +
-    geom_line(aes(x=S, y=g1)) +
-    geom_line(aes(x=S, y=g2)) +
-    geom_line(aes(x=S, y=g3))
+SS <- expand.grid(x=X, y=Y, KEEP.OUT.ATTRS = TRUE)
+SS$v <- as.vector(V)  # unfolds the matrix column-wise
+SS$policy <- as.vector(policy)
+
+ggplot(SS, aes(x=x,y=y)) +
+    geom_raster(aes(fill=policy))
 
 
-plot(S, P[2000,,1])
-    
+library(scatterplot3d)  # an alternative to ggplot2
+with(SS, scatterplot3d(x=x, y=y, z=policy, pch=20))
