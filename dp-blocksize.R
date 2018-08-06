@@ -10,7 +10,7 @@ Y <- seq(0, 25, by=1)   # number of arrivals during prev period
 ## 2 MB gets 4000 txs
 ## and so on
 C <- 1:2  # possible controls
-K <- 10   # txs per block
+K <- 10   # txs per unit of control
 
 alpha <- .9  # discount factor for DP iteration
 b <- function(x) 15/(1 + exp(-.05*(x-100))) # tx fee in satoshis per byte
@@ -31,11 +31,8 @@ g <- array(data = 0,
            dim = c(length(X), length(C)),
            dimnames = list(statex=as.character(X),
                            control=as.character(C)))
-for (x in 1:length(X)) {
-    for (u in 1:length(C)) {
-        g[x,u] <- b(X[x])*min(C[u]*K, X[x])
-    }
-}
+blk.size <- sapply(X, function(x) pmin(C*K, x))  # num txs in block
+g <- b(X) * t(blk.size)  # element-wise
 
 ## transition probabilities.
 ## When computing the value-to-go, we need to take
@@ -45,7 +42,7 @@ for (x in 1:length(X)) {
 ## x.next = x - u + (lambda*y + xi)
 ## and
 ## y.next = lambda*y + xi
-## During value iteration we will know x,y,x.next,y.next and we
+## During value iteration we will know x,y,x.next,y.next, and u. We
 ## compute the probability of observing the associated value of xi.
 ## Note that we can use either system equation to solve for xi.
 ## Let's use the system equation for y.next since the state space
@@ -54,19 +51,16 @@ for (x in 1:length(X)) {
 ## what is the probability that xi took on this value?
 ## xi ~ Normal(b0, sigma), so an estimate is provided by
 ## pnorm(xi+.5, mean=b0, sd=sigma) - pnorm(xi-.5, mean=b0, sd=sigma)
+## Note that the distribution of the random xi does not depend on the
+## control u.
 P <- array(data = NA,
-           dim = c(length(Y), length(Y), length(C)),
+           dim = c(length(Y), length(Y)),
            dimnames = list(statey=as.character(Y),
-                           stateynext=as.character(Y),
-                           control=as.character(C)))
+                           stateynext=as.character(Y)))
 for (y in 1:length(Y)) {
-    for (y.next in 1:length(Y)) {
-        for (u in 1:length(C)) {
-            xi <- Y[y.next] - lambda*Y[y]
-            P[y,y.next,u] <- pnorm(xi+.5, mean=b0, sd=sigma) -
-                pnorm(xi-.5, mean=b0, sd=sigma)
-        }
-    }
+    xi <- Y - lambda*Y[y]
+    P[y,] <- pnorm(xi+.5, mean=b0, sd=sigma) -
+        pnorm(xi-.5, mean=b0, sd=sigma)
 }
 
 ## applies the DP iteration.
@@ -79,8 +73,8 @@ F <- function(x, y) {
         for (y.next in Y) {
             ## expectation is wrt xi.
             ## see note on computation of transition probabilities.
-            x.next <- min(max(0, X[x] - C[u] + y.next), X[length(X)])
-            val.to.go <- val.to.go + P[y,y.next+1,u]*V[x.next+1,y.next+1]
+            x.next <- min(max(0, X[x] - C[u]*K + y.next), X[length(X)])
+            val.to.go <- val.to.go + P[y,y.next+1]*V[x.next+1,y.next+1]
             val[u] <- g[x,u] + alpha*val.to.go
         }
     }
@@ -114,13 +108,9 @@ while (!all(near(V - V.prev, 0, tol=eps))) {
 
 ## diagnostics and visualization of the optimal value function
 ## and the optimal policy
-
 SS <- expand.grid(x=X, y=Y, KEEP.OUT.ATTRS = TRUE)
 SS$v <- as.vector(V)  # unfolds the matrix column-wise
 SS$policy <- as.vector(policy)
 
-ggplot(SS, aes(x=x,y=y)) +
-    geom_raster(aes(fill=policy))
+ggplot(SS, aes(x=x,y=y)) + geom_raster(aes(fill=policy))
 
-library(scatterplot3d)  # an alternative to ggplot2
-with(SS, scatterplot3d(x=x, y=y, z=policy, pch=20))
