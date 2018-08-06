@@ -69,14 +69,14 @@ for (y in 1:length(Y)) {
 F <- function(x, y) {
     val <- rep(Inf, length(C))   # holds the rev for each control
     for (u in 1:length(C)) {
-        val.to.go <- 0
-        for (y.next in Y) {
-            ## expectation is wrt xi.
-            ## see note on computation of transition probabilities.
-            x.next <- min(max(0, X[x] - C[u]*K + y.next), X[length(X)])
-            val.to.go <- val.to.go + P[y,y.next+1]*V[x.next+1,y.next+1]
-            val[u] <- g[x,u] + alpha*val.to.go
-        }
+        ## expectation is wrt xi.
+        ## see note on computation of transition probabilities.
+        ## vectorized version: given x,y, we determine the possible values
+        ## of x.next for all y.next (that is, for all Y)
+        x.next <- pmin(pmax(0, X[x] - C[u]*K + Y), X[length(X)])
+        ## then take expectation by using the probability of going from
+        ## y to y.next (that is, Y).
+        val[u] <- g[x,u] + alpha * sum(P[y,Y+1] * diag(V[x.next+1,Y+1]))
     }
     val.star <- max(val)
     ctrl <- which(near(val.star, val))  # could be a tie
