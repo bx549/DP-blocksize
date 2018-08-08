@@ -2,21 +2,21 @@
 library(tidyverse)
 
 ## state space
-X <- seq(0, 200, by=1)  # size of mempool
-Y <- seq(0, 25, by=1)   # number of arrivals during prev period
+X <- seq(0, 1000, by=1)  # size of mempool
+Y <- seq(0, 100, by=1)   # number of arrivals during prev period
 
 ## control is the block size in MB
 ## 1 MB gets 2000 txs
 ## 2 MB gets 4000 txs
 ## and so on
 C <- 1:2  # possible controls
-K <- 10   # txs per unit of control
+K <- 100   # txs per unit of control
 
 alpha <- .9  # discount factor for DP iteration
 b <- function(x) 15/(1 + exp(-.05*(x-100))) # tx fee in satoshis per byte
 lambda <- .7 # coefficient for AR1 model w_k = lambda*w_{k-1} + xi_k
-sigma <- 5   # sd for error term in AR1 model
-b0 <- 10     # in the AR1 model
+sigma <- 75   # sd for error term in AR1 model
+b0 <- 100    # in the AR1 model
 
 f <- function(x, y, u) {
     xi <- rnorm(1, 0, sigma)
@@ -63,26 +63,6 @@ for (y in 1:length(Y)) {
         pnorm(xi-.5, mean=b0, sd=sigma)
 }
 
-## applies the DP iteration.
-## note that x,y are indices into the state space, while x.next, y.next
-## are state space values.
-F <- function(x, y) {
-    val <- rep(Inf, length(C))   # holds the rev for each control
-    for (u in 1:length(C)) {
-        ## expectation is wrt xi.
-        ## see note on computation of transition probabilities.
-        ## vectorized version: given x,y, we determine the possible values
-        ## of x.next for all y.next (that is, for all Y)
-        x.next <- pmin(pmax(0, X[x] - C[u]*K + Y), X[length(X)])
-        ## then take expectation by using the probability of going from
-        ## y to y.next (that is, Y).
-        val[u] <- g[x,u] + alpha * sum(P[y,Y+1] * diag(V[x.next+1,Y+1]))
-    }
-    val.star <- max(val)
-    ctrl <- which(near(val.star, val))  # could be a tie
-    list(val.star, ctrl[1])             # so just choose 1st entry
-}
-    
 ## initialization
 eps <- .01     # tolerance for convergence
 k <- 0          # iteration number
@@ -96,16 +76,26 @@ while (!all(near(V - V.prev, 0, tol=eps))) {
     V.prev <- V
     for (x in 1:length(X)) {
         for (y in 1:length(Y)) {
-            lst <- F(x, y) # pass the indices
-            V[x,y] <- lst[[1]]
-            policy[x,y] <- lst[[2]]
+            val <- rep(Inf, length(C))   # holds the rev for each control
+            for (u in 1:length(C)) {
+                ## possible values of x.next for each possible y.next
+                x.next <- X[x] - C[u]*K + Y
+                x.next <- ifelse(x.next<0, 0, x.next)
+                x.next <- ifelse(x.next>max(X), max(X), x.next)
+                ## note that x.next is a state, not an index
+                val[u] <- g[x,u] +
+                    alpha * sum(P[y,Y+1] * diag(V[x.next+1,Y+1]))
+            }
+            V[x,y] <- max(val)
+            ctrl <- which(near(max(val), val))[1]  # could be a tie
+            policy[x,y] <- C[ctrl]
         }
     }
     if (near(k %% 25, 0)) { # print a message to check progress
         message("k = ", k, "sum(V-V.prev) = ", sum(V-V.prev))
     }
 }
-
+ 
 ## diagnostics and visualization of the optimal value function
 ## and the optimal policy
 SS <- expand.grid(x=X, y=Y, KEEP.OUT.ATTRS = TRUE)
