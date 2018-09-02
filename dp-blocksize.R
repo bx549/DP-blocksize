@@ -18,16 +18,28 @@ Y <- seq(0, 6000, by=10)   # number of arrivals during prev period
 C <- 1:3   # possible controls
 K <- 2000  # txs per unit of control
 
-alpha <- .9  # discount factor for DP iteration
-b <- function(x) 15/(1 + exp(-.05*(x-100))) # tx fee in satoshis per byte
-lambda <- .7 # coefficient for AR1 model w_k = lambda*w_{k-1} + xi_k
-sigma <- sqrt(4.7e6)   # sd for error term in AR1 model
-b0 <- 3000    # in the AR1 model
+alpha <- .9          # discount factor for DP iteration
+b <- function(x) 30/(1 + exp(-.0001*(x-15000)))  # tx fee in satoshis per byte
+## tx fees were estimated from data available at
+## https://www.blockchain.com/charts/mempool-count
+## and
+## https://bitcoinfees.earn.com/
+## a typical tx is about 500 bytes
+## a typical tx count in the mempool is about 10,000 txs
+## b(10,000) returns 11.3 satoshis per byte
+## 11.3 * 500 * 1e-8 * 7000 = .4 or about 40 cents for a typical tx fee
 
+lambda <- .7         # coefficient for AR1 model w_k = lambda*w_{k-1} + xi_k
+sigma <- sqrt(4.7e6) # sd for error term in AR1 model
+b0 <- 0              # intercept in the AR1 model
+
+## system evolution
+## we don't use this function in the value iteration algorithm,
+## but it is helpful to understand the underlying process.
 f <- function(x, y, u) {
-    xi <- rnorm(1, 0, sigma)
-    x.next <- max(0, x - u*K + lambda*y + xi)
+    xi <- rnorm(1, b0, sigma)
     y.next <- max(0, lambda*y + xi)
+    x.next <- max(0, x - u*K + y.next)
     list(x.next, y.next)
 }
 
