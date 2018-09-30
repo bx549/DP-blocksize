@@ -2,8 +2,8 @@
 library(tidyverse)
 
 ## state space
-X <- seq(0, 100000, by=10)  # size of mempool
-Y <- seq(0, 6000, by=10)   # number of arrivals during prev period
+X <- seq(0, 100000, by=100)  # size of mempool
+Y <- seq(0, 6000, by=100)   # number of arrivals during prev period
 ## these numbers were arrived at by looking at the history
 ## from aug '17 to aug '18 (which includes the dec/jan busy period)
 ## of the
@@ -19,26 +19,26 @@ C <- 1:3   # possible controls
 K <- 2000  # txs per unit of control
 
 alpha <- .9          # discount factor for DP iteration
-b <- function(x) 30/(1 + exp(-.0001*(x-15000)))  # tx fee in satoshis per byte
+b <- function(x) 30/(1 + exp(-.0001*(x-50000)))  # tx fee in satoshis per byte
 ## tx fees were estimated from data available at
 ## https://www.blockchain.com/charts/mempool-count
 ## and
 ## https://bitcoinfees.earn.com/
 ## a typical tx is about 500 bytes
 ## a typical tx count in the mempool is about 10,000 txs
-## b(10,000) returns 11.3 satoshis per byte
+## b(10000) returns 11.3 satoshis per byte
 ## 11.3 * 500 * 1e-8 * 7000 = .4 or about 40 cents for a typical tx fee
 
-lambda <- .7         # coefficient for AR1 model w_k = lambda*w_{k-1} + xi_k
-sigma <- sqrt(4.7e6) # sd for error term in AR1 model
-b0 <- 0              # intercept in the AR1 model
+lambda <- .7 # coefficient for AR1 model w_k = lambda*w_{k-1} + xi_k
+sigma <- 600 # sd for error term in AR1 model
+b0 <- 900           # intercept in the AR1 model
 
 ## system evolution
 ## we don't use this function in the value iteration algorithm,
 ## but it is helpful to understand the underlying process.
 f <- function(x, y, u) {
-    xi <- rnorm(1, b0, sigma)
-    y.next <- max(0, lambda*y + xi)
+    xi <- rnorm(1, 0, sigma)
+    y.next <- max(0, b0 + lambda*y + xi)
     x.next <- max(0, x - u*K + y.next)
     list(x.next, y.next)
 }
@@ -57,29 +57,42 @@ g <- b(X) * t(blk.size)  # element-wise
 ## expectation wrt the random component xi. We want to know the
 ## probability of going from (x,y) to (x.next,y.next) when control u
 ## is applied. From the system equations for x.next, y.next
-## x.next = x - u + (lambda*y + xi)
+## x.next = x - u + (b0 + lambda*y + xi)
 ## and
-## y.next = lambda*y + xi
+## y.next = b0 + lambda*y + xi
 ## During value iteration we will know x,y,x.next,y.next, and u. We
 ## compute the probability of observing the associated value of xi.
 ## Note that we can use either system equation to solve for xi.
-## Let's use the system equation for y.next since the state space
-## for y is smaller than for x. Given y and y.next,
-## xi = y.next - lambda*y
+## Wait! Is that true? The numer of arrivals y is independent of
+## the control that is used, but the size of the mempool x is not.
+## We want the cost-to-go to depend on the control that is used.
+## Furthermore, y and y.next are correlated. It's like this:
+## we observe x, y, and y.next and we ask what is the probability
+## of going to x.next? xi would have to take on a certain value.
+
+## Let's use the system equation for x.next 
+## xi = x.next - x + u - b0 - lambda*y
 ## what is the probability that xi takes on this value?
-## xi ~ Normal(b0, sigma), so an estimate is provided by
-## pnorm(xi+.5, mean=b0, sd=sigma) - pnorm(xi-.5, mean=b0, sd=sigma)
-## Note that the distribution of the random xi does not depend on the
-## control u.
+## xi ~ Normal(0, sigma), so an estimate is provided by
+## pnorm(xi+.5, mean=0, sd=sigma) - pnorm(xi-.5, mean=0, sd=sigma)
 P <- array(data = NA,
-           dim = c(length(Y), length(Y)),
-           dimnames = list(statey=as.character(Y),
-                           stateynext=as.character(Y)))
-for (y in 1:length(Y)) {
-    xi <- Y - lambda*Y[y]
-    P[y,] <- pnorm(xi+.5, mean=b0, sd=sigma) -
-        pnorm(xi-.5, mean=b0, sd=sigma)
+           dim = c(length(X), length(X), length(Y), length(C)),
+           dimnames = list(statex=as.character(X),
+                           statexnext=as.character(X),
+                           statey=as.character(Y),
+                           control=as.character(C)))
+for (x in 1:length(X)) {
+    for (x.next in 1:length(X)) {
+        for (y in 1:length(Y)) {
+            for (u in 1:length(C)) {
+                xi <- X[x.next] - X[x] + C[u]*K - lambda*Y[y]
+                P[x,x.next,y,u] <- pnorm(xi+.5, mean=0, sd=sigma) -
+                    pnorm(xi-.5, mean=0, sd=sigma)
+            }
+        }
+    }
 }
+
 
 ## initialization
 eps <- .01     # tolerance for convergence
@@ -94,36 +107,39 @@ while (!all(near(V - V.prev, 0, tol=eps))) {
     V.prev <- V
     for (x in 1:length(X)) {
         for (y in 1:length(Y)) {
-            val <- rep(Inf, length(C))   # holds the rev for each control
+            val <- numeric(length(C))   # holds the rev for each control
             for (u in 1:length(C)) {
-                ## possible values of x.next for each possible y.next
-                x.next <- X[x] - C[u]*K + Y
-                x.next <- ifelse(x.next<0, 0, x.next)
-                x.next <- ifelse(x.next>max(X), max(X), x.next)
-                ## note that x.next is a vector of states, not indices
-                ## so we need to determine the associated indices
-                x.next.idx <- match(x.next, X)
-                val[u] <- g[x,u] +
-                    alpha * sum(P[y,1:length(Y)] * diag(V[x.next.idx,1:length(Y)]))
+
+                cost.to.go <- 0
+                ## for each possible x.next, compute the associated y.next
+                for (x.next in 1:length(X)) {
+                    y.next <- X[x.next] - X[x] + C[u]*K  # y.next is a state not an index
+                    y.next <- ifelse(y.next<0, 0, y.next)
+                    y.next <- ifelse(y.next>max(Y), max(Y), y.next)
+                    y.next.idx <- match(y.next, Y)       # locate the index
+                    
+                    cost.to.go <- cost.to.go + P[x,x.next,y,u]*V[x.next,y.next.idx]
+                }
+                val[u] <- g[x,u] + cost.to.go
             }
             V[x,y] <- max(val)
             ctrl <- which(near(max(val), val))[1]  # could be a tie
             policy[x,y] <- C[ctrl]
         }
     }
-    if (near(k %% 10, 0)) { # print a message to check progress
-        message("k = ", k, "sum(V-V.prev) = ", sum(V-V.prev))
-    }
+    message("k = ", k, "sum(V-V.prev) = ", sum(V-V.prev))
 }
 
 ## save results to disk
 save.image("dp-blocksize.RData")
- 
+
+if (!interactive()) stop()
+
 ## diagnostics and visualization of the optimal value function
 ## and the optimal policy
 SS <- expand.grid(x=X, y=Y, KEEP.OUT.ATTRS = TRUE)
 SS$v <- as.vector(V)  # unfolds the matrix column-wise
 SS$policy <- as.vector(policy)
 
-ggplot(SS, aes(x=x,y=y)) + geom_raster(aes(fill=policy))
-
+SSs <- subset(SS, x %in% 900:1100)
+ggplot(SSs, aes(x=x,y=y)) + geom_raster(aes(fill=policy))
