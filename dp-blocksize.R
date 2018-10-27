@@ -69,29 +69,57 @@ g <- b(X) * t(blk.size)  # element-wise
 ## Furthermore, y and y.next are correlated. It's like this:
 ## we observe x, y, and y.next and we ask what is the probability
 ## of going to x.next? xi would have to take on a certain value.
-
 ## Let's use the system equation for x.next 
 ## xi = x.next - x + u - b0 - lambda*y
 ## what is the probability that xi takes on this value?
 ## xi ~ Normal(0, sigma), so an estimate is provided by
 ## pnorm(xi+.5, mean=0, sd=sigma) - pnorm(xi-.5, mean=0, sd=sigma)
 P <- array(data = NA,
-           dim = c(length(X), length(X), length(Y), length(C)),
+           dim = c(length(X), length(Y), length(X), length(C)),
            dimnames = list(statex=as.character(X),
-                           statexnext=as.character(X),
                            statey=as.character(Y),
+                           statexnext=as.character(X),
                            control=as.character(C)))
-for (x in 1:length(X)) {
-    for (x.next in 1:length(X)) {
-        for (y in 1:length(Y)) {
+
+library(parallel)
+
+num.cores <- 8
+cl <- makeCluster(num.cores, type="FORK")
+parSapply(cl, 1:length(X),
+          function(x) {
+
+              for (y in 1:length(Y)) {
+                  for (x.next in 1:length(X)) {
+                      for (u in 1:length(C)) {
+                          xi <- X[x.next] - X[x] + C[u]*K - lambda*Y[y]
+                          P[x,y,x.next,u] <<- pnorm(xi+.5, mean=0, sd=sigma) -
+                              pnorm(xi-.5, mean=0, sd=sigma)
+                      }
+                  }
+              }
+              
+          })
+stopCluster(cl)
+
+
+require(parallel)
+require(doParallel)
+num.cores <- 8
+cl <- makeCluster(num.cores)
+registerDoParallel(num.cores)
+P <- foreach(x = 1:length(X), .combine='rbind') %dopar% {
+    for (y in 1:length(Y)) {
+        for (x.next in 1:length(X)) {
             for (u in 1:length(C)) {
                 xi <- X[x.next] - X[x] + C[u]*K - lambda*Y[y]
-                P[x,x.next,y,u] <- pnorm(xi+.5, mean=0, sd=sigma) -
+                P[x,y,x.next,u] <- pnorm(xi+.5, mean=0, sd=sigma) -
                     pnorm(xi-.5, mean=0, sd=sigma)
             }
         }
     }
 }
+stopCluster(cl)
+
 
 
 ## initialization
@@ -101,34 +129,44 @@ V <- matrix(0, nrow=length(X), ncol=length(Y)) # initial values
 V.prev <- matrix(eps + 1, nrow=length(X), ncol=length(Y))
 policy <- matrix(NA, nrow=length(X), ncol=length(Y))
 
+require(parallel)
+require(doParallel)
+num.cores <- 28
+cl <- makeCluster(num.cores)
+registerDoParallel(num.cores)
+
 ## value iteration
 while (!all(near(V - V.prev, 0, tol=eps))) {
     k <- k + 1
     V.prev <- V
-    for (x in 1:length(X)) {
-        for (y in 1:length(Y)) {
+    V <- foreach(x = X, .combine='rbind') %:% 
+        foreach(y = Y, .combine='c') %dopar% {
+            x.idx <- match(x, X)
+            y.idx <- match(y, Y)
+
             val <- numeric(length(C))   # holds the rev for each control
             for (u in 1:length(C)) {
 
                 cost.to.go <- 0
                 ## for each possible x.next, compute the associated y.next
                 for (x.next in 1:length(X)) {
-                    y.next <- X[x.next] - X[x] + C[u]*K  # y.next is a state not an index
+                    y.next <- X[x.next] - x + C[u]*K  # y.next is a state not an index
                     y.next <- ifelse(y.next<0, 0, y.next)
                     y.next <- ifelse(y.next>max(Y), max(Y), y.next)
                     y.next.idx <- match(y.next, Y)       # locate the index
                     
-                    cost.to.go <- cost.to.go + P[x,x.next,y,u]*V[x.next,y.next.idx]
+                    cost.to.go <- cost.to.go + P[x.idx,x.next,y.idx,u]*V[x.next,y.next.idx]
                 }
-                val[u] <- g[x,u] + cost.to.go
+                val[u] <- g[x.idx,u] + cost.to.go
             }
-            V[x,y] <- max(val)
+            V[x.idx,y.idx] <- max(val)
             ctrl <- which(near(max(val), val))[1]  # could be a tie
-            policy[x,y] <- C[ctrl]
+            policy[x.idx,y.idx] <- C[ctrl]
         }
-    }
     message("k = ", k, "sum(V-V.prev) = ", sum(V-V.prev))
 }
+
+stopCluster(cl)
 
 ## save results to disk
 save.image("dp-blocksize.RData")
@@ -141,5 +179,4 @@ SS <- expand.grid(x=X, y=Y, KEEP.OUT.ATTRS = TRUE)
 SS$v <- as.vector(V)  # unfolds the matrix column-wise
 SS$policy <- as.vector(policy)
 
-SSs <- subset(SS, x %in% 900:1100)
-ggplot(SSs, aes(x=x,y=y)) + geom_raster(aes(fill=policy))
+ggplot(SS, aes(x=x,y=y)) + geom_raster(aes(fill=policy))
